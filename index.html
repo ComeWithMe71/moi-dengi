@@ -401,13 +401,13 @@ Sync.run=async function(){
     if(maxSeen)LS.set('mk.last',maxSeen);
     const first=!LS.get('mk.pulled',false);LS.set('mk.pulled',true);
     if(changed)LS.set('mk.docs',Store.docs);
-    Sync.lastOk=Date.now();
+    Sync.lastOk=Date.now();Sync.lastErr='';
     setSync(Object.keys(obGet()).length?'wait':'ok');
     if(changed||first){if(!dragging)emit()}
   }catch(e){
     failed=true;
     if(!Auth.s||e.status===401){setSync('auth');if(!Auth.s)emit()}
-    else setSync(e.code==='network'?'offline':'err');
+    else{Sync.lastErr=e.code==='PGRST205'||e.code==='42P01'?'В базе нет таблицы docs — выполните SQL из инструкции (Supabase → SQL Editor).':e.code==='network'?'':String(e.message||'').slice(0,160);setSync(e.code==='network'?'offline':'err')}
     if(!LS.get('mk.pulled',false))emit();
   }finally{
     Sync.busy=false;
@@ -519,7 +519,7 @@ function render(){
   const app=$('#app');
   if(!Store.synced){app.innerHTML='<div class="loading"><div class="spin"></div>Загружаю…</div>';$('#tabs').hidden=true;return}
   if(HAS_CLOUD&&!Auth.s){renderLogin(app);$('#tabs').hidden=true;return}
-  if(HAS_CLOUD&&!LS.get('mk.pulled',false)){app.innerHTML='<div class="loading" style="flex-direction:column;gap:14px">'+(Store.sync==='offline'||Store.sync==='err'?'<span>Нет связи с сервером</span><button class="btn secondary" style="width:auto;padding:0 24px" id="retry">Повторить</button>':'<div class="spin"></div><span>Загружаю ваши данные…</span>')+'</div>';$('#tabs').hidden=true;const rb=$('#retry');if(rb)rb.onclick=()=>{Sync.run();render()};return}
+  if(HAS_CLOUD&&!LS.get('mk.pulled',false)){app.innerHTML='<div class="loading" style="flex-direction:column;gap:14px">'+(Store.sync==='offline'?'<span>Нет интернета — не могу загрузить данные</span>':Store.sync==='err'?'<span style="max-width:320px;text-align:center">Не удалось загрузить данные.<br>'+esc(Sync.lastErr||'Сервер ответил ошибкой.')+'</span><button class="btn secondary" style="width:auto;padding:0 24px" id="retry">Повторить</button>':'<div class="spin"></div><span>Загружаю ваши данные…</span>')+'</div>';$('#tabs').hidden=true;const rb=$('#retry');if(rb)rb.onclick=()=>{Sync.run();render()};const rl=$('#relog');if(rl)rl.onclick=()=>{Auth.signOut();render()};return}
   if(!books().length){renderWelcome(app);$('#tabs').hidden=true;return}
   if(!curBook()){prefs.book=books()[0].id}
   $('#tabs').hidden=false;
