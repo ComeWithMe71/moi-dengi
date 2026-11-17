@@ -1,5 +1,5 @@
 /* Офлайн-режим: оболочка приложения хранится на устройстве. Запросы к Supabase не кешируются. */
-const VERSION = 'md-v2.0.1';
+const VERSION = 'md-v2.0.2';
 const SHELL = ['./', './index.html', './config.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

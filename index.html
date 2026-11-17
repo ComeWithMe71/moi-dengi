@@ -340,6 +340,18 @@ function setSession(j){
   Auth.s={access_token:j.access_token,refresh_token:j.refresh_token,expires_at:Date.now()+(j.expires_in||3600)*1000,user:{id:j.user.id,email:j.user.email}};
   LS.set('mk.session',Auth.s);
 }
+Auth.recover=async(email)=>{const back=location.origin+location.pathname;await authReq('recover?redirect_to='+encodeURIComponent(back),{email})};
+Auth.setPassword=async(password)=>{const t=await Auth.token();let r;try{r=await fetch(CFG.supabaseUrl+'/auth/v1/user',{method:'PUT',headers:{'apikey':CFG.supabaseAnonKey,'Authorization':'Bearer '+t,'Content-Type':'application/json'},body:JSON.stringify({password})})}catch(e){throw new ApiError('Нет связи с сервером',0,'network')}const j=await r.json().catch(()=>({}));if(!r.ok)throw new ApiError(j.msg||j.message||('HTTP '+r.status),r.status,j.error_code||j.code)};
+/* ссылка из письма «сбросить пароль» приходит с токенами в адресе после # */
+Auth.fromLink=async()=>{
+  const h=new URLSearchParams((location.hash||'').replace(/^#/,''));
+  if(h.get('error_description')){history.replaceState(null,'',location.pathname+location.search);return {error:h.get('error_description')}}
+  if(!h.get('access_token'))return null;
+  const type=h.get('type');const at=h.get('access_token'),rt=h.get('refresh_token'),exp=Number(h.get('expires_in')||3600);
+  history.replaceState(null,'',location.pathname+location.search);
+  try{const r=await fetch(CFG.supabaseUrl+'/auth/v1/user',{headers:{'apikey':CFG.supabaseAnonKey,'Authorization':'Bearer '+at}});const u=await r.json();if(!r.ok)throw 0;
+    setSession({access_token:at,refresh_token:rt,expires_in:exp,user:u});return {type}}catch(e){return {error:'Ссылка устарела. Запросите новую.'}}
+};
 Auth.signIn=async(email,password)=>{setSession(await authReq('token?grant_type=password',{email,password}))};
 Auth.signUp=async(email,password)=>{const j=await authReq('signup',{email,password});if(j.access_token&&j.user){setSession(j);return true}return false};
 let refreshing=null;
@@ -420,6 +432,8 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
 setInterval(()=>{if(document.visibilityState==='visible')Sync.run()},20000);
 
 Store.init=async function(){
+  if(HAS_CLOUD){const L=await Auth.fromLink();if(L){Auth.link=L}}
+  Store.booted=true;
   Store.docs=LS.get('mk.docs',{})||{};
   Store.synced=true;
   if(!HAS_CLOUD){setSync('local');return}
@@ -506,7 +520,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'){if($('#sheet').clas
 const VIEWS=['main','overview','history','settings'];
 let view='main';
 let ui={ovP:null,ovKind:'expense',hq:'',hcoin:'',hper:'cur'};
-function route(){const h=(location.hash||'').replace('#','');view=VIEWS.includes(h)?h:'main';render()}
+function route(){if(Store.booted&&/access_token=|error_description=/.test(location.hash)){location.reload();return}const h=(location.hash||'').replace('#','');view=VIEWS.includes(h)?h:'main';render()}
 window.addEventListener('hashchange',route);
 function go(v){if(v==='main'){if(location.hash){history.pushState(null,'',location.pathname+location.search);}route()}else location.hash=v}
 $$('.tab').forEach(b=>b.addEventListener('click',()=>go(b.dataset.go)));
@@ -518,6 +532,7 @@ function renderSync(el){const s=Store.sync;const map={ok:['ok','Синхрони
 function render(){
   const app=$('#app');
   if(!Store.synced){app.innerHTML='<div class="loading"><div class="spin"></div>Загружаю…</div>';$('#tabs').hidden=true;return}
+  if(HAS_CLOUD&&Auth.s&&Auth.link&&Auth.link.type==='recovery'){renderNewPassword(app);$('#tabs').hidden=true;return}
   if(HAS_CLOUD&&!Auth.s){renderLogin(app);$('#tabs').hidden=true;return}
   if(HAS_CLOUD&&!LS.get('mk.pulled',false)){app.innerHTML='<div class="loading" style="flex-direction:column;gap:14px">'+(Store.sync==='offline'?'<span>Нет интернета — не могу загрузить данные</span>':Store.sync==='err'?'<span style="max-width:320px;text-align:center">Не удалось загрузить данные.<br>'+esc(Sync.lastErr||'Сервер ответил ошибкой.')+'</span><button class="btn secondary" style="width:auto;padding:0 24px" id="retry">Повторить</button>':'<div class="spin"></div><span>Загружаю ваши данные…</span>')+'</div>';$('#tabs').hidden=true;const rb=$('#retry');if(rb)rb.onclick=()=>{Sync.run();render()};const rl=$('#relog');if(rl)rl.onclick=()=>{Auth.signOut();render()};return}
   if(!books().length){renderWelcome(app);$('#tabs').hidden=true;return}
@@ -538,9 +553,11 @@ function renderLogin(app){
     app.innerHTML='<div class="welcome auth"><div class="logo">'+icon('coins')+'</div><h1>'+(mode==='in'?'Вход':'Новый аккаунт')+'</h1><p>'+(mode==='in'?'Ваши деньги синхронизируются между телефоном и компьютером.':'Аккаунт нужен, чтобы данные были на всех ваших устройствах.')+'</p>'+
     '<form id="af" novalidate><input class="field" id="ae" type="email" autocomplete="email" inputmode="email" placeholder="Почта" aria-label="Почта"><input class="field" id="ap" type="password" autocomplete="'+(mode==='in'?'current-password':'new-password')+'" placeholder="Пароль'+(mode==='up'?' (не короче 6 символов)':'')+'" aria-label="Пароль">'+
     '<div class="err" id="aerr" style="text-align:left;margin:0 2px 10px"></div><button class="btn primary" id="ago" type="submit">'+(mode==='in'?'Войти':'Создать аккаунт')+'</button></form>'+
-    '<button class="link" id="aswap">'+(mode==='in'?'Нет аккаунта? Создать':'Уже есть аккаунт? Войти')+'</button></div>';
+    '<button class="link" id="aswap">'+(mode==='in'?'Нет аккаунта? Создать':'Уже есть аккаунт? Войти')+'</button>'+(mode==='in'?'<button class="link" id="aforgot">Забыли пароль?</button>':'')+'</div>';
     paintIcons();
     $('#aswap').onclick=()=>{mode=mode==='in'?'up':'in';draw()};
+    const fg=$('#aforgot');if(fg)fg.onclick=()=>renderForgot(app,$('#ae').value.trim());
+    if(Auth.link&&Auth.link.error){$('#aerr').textContent=Auth.link.error;Auth.link=null}
     $('#af').onsubmit=async e=>{
       e.preventDefault();const em=$('#ae').value.trim(),pw=$('#ap').value,er=$('#aerr'),bt=$('#ago');
       er.style.color='';er.textContent='';
@@ -559,6 +576,28 @@ function renderLogin(app){
     };
   };
   draw();
+}
+function renderForgot(app,email){
+  app.innerHTML='<div class="welcome auth"><div class="logo">'+icon('coins')+'</div><h1>Сброс пароля</h1><p>Пришлём письмо со ссылкой. Откройте её на этом устройстве и задайте новый пароль.</p>'+
+  '<form id="ff" novalidate><input class="field" id="fe" type="email" autocomplete="email" inputmode="email" placeholder="Почта" aria-label="Почта" value="'+esc(email||'')+'"><div class="err" id="ferr" style="text-align:left;margin:0 2px 10px"></div><button class="btn primary" id="fgo" type="submit">Отправить ссылку</button></form><button class="link" id="fback">Назад ко входу</button></div>';
+  paintIcons();
+  $('#fback').onclick=()=>renderLogin(app);
+  $('#ff').onsubmit=async e=>{e.preventDefault();const em=$('#fe').value.trim(),er=$('#ferr'),bt=$('#fgo');er.style.color='';er.textContent='';
+    if(!/^\S+@\S+\.\S+$/.test(em)){er.textContent='Введите почту';return}
+    bt.disabled=true;bt.innerHTML='<div class="spin"></div>';
+    try{await Auth.recover(em);er.style.color='var(--inc)';er.textContent='Письмо отправлено на '+em+'. Проверьте почту (и папку «Спам»).';bt.textContent='Отправить ещё раз'}
+    catch(err){er.textContent=err.code==='network'?'Нет связи с сервером. Проверьте интернет.':/rate|seconds/i.test(String(err.message))?'Слишком часто. Подождите минуту и попробуйте снова.':'Не получилось: '+err.message;bt.textContent='Отправить ссылку'}
+    bt.disabled=false};
+}
+function renderNewPassword(app){
+  app.innerHTML='<div class="welcome auth"><div class="logo">'+icon('coins')+'</div><h1>Новый пароль</h1><p>'+esc(Auth.s.user.email)+'</p>'+
+  '<form id="nf" novalidate><input class="field" id="np" type="password" autocomplete="new-password" placeholder="Новый пароль (не короче 6 символов)" aria-label="Новый пароль"><div class="err" id="nerr" style="text-align:left;margin:0 2px 10px"></div><button class="btn primary" id="ngo" type="submit">Сохранить пароль</button></form></div>';
+  paintIcons();
+  $('#nf').onsubmit=async e=>{e.preventDefault();const pw=$('#np').value,er=$('#nerr'),bt=$('#ngo');er.textContent='';
+    if(pw.length<6){er.textContent='Пароль — не короче 6 символов';return}
+    bt.disabled=true;bt.innerHTML='<div class="spin"></div>';
+    try{await Auth.setPassword(pw);Auth.link=null;LS.set('mk.pulled',false);view='main';render();Sync.run();toast('Пароль изменён')}
+    catch(err){er.textContent=/same|different/i.test(String(err.message))?'Новый пароль должен отличаться от старого':'Не получилось: '+err.message;bt.disabled=false;bt.textContent='Сохранить пароль'}};
 }
 function renderWelcome(app){
   app.innerHTML='<div class="welcome"><div class="logo">'+icon('coins','₽')+'</div><h1>Деньги под контролем</h1><p>Перетаскивайте монетки — так записываются доходы, расходы и переводы.</p>'+
